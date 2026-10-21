@@ -1,0 +1,165 @@
+networks:
+  frontend-net:
+    driver: bridge
+  backend-net:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  postgres_data:
+
+
+services:
+  # Наше тестовое приложение (порт снаружи убран!)
+  test-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: devops_test_app
+    restart: unless-stopped
+    networks:
+      - frontend-net
+      - backend-net
+    environment:
+      - DATABASE_URL=postgresql://postgres_user:postgres_password@postgres:5432/devops_db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: devops_postgres
+    restart: unless-stopped
+    #Настройка самой БД при старте
+    environment:
+      - POSTGRES_USER=postgres_user
+      - POSTGRES_PASSWORD=postgres_password
+      - POSTGRES_DB=devops_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data #Данные БД будут жить тут
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres_user -d devops_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+    # Экспортер метрик для PostgreSQL
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: devops_postgres_exporter
+    restart: unless-stopped
+    environment:
+      # Указываем экспортеру, к какой базе подключаться (используем имя сервиса postgres!)
+      - DATA_SOURCE_NAME=postgresql://postgres_user:postgres_password@postgres:5432/devops_db?sslmode=disable
+    networks:
+      - backend-net
+    depends_on:
+      - postgres
+
+
+  # Prometheus (порт снаружи убран, полная изоляция!)
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: devops_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.external-url=/prometheus'
+    networks:
+      - backend-net
+
+  # Grafana (порт снаружи убран!)
+  grafana:
+    image: grafana/grafana:10.4.1
+    container_name: devops_grafana
+    restart: unless-stopped
+    environment:
+      - GF_SERVER_ROOT_URL=http://localhost/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - backend-net
+
+  # Loki
+  loki:
+    image: grafana/loki:2.9.4
+    container_name: devops_loki
+    restart: unless-stopped
+    networks:
+      - backend-net
+
+  # Promtail
+  promtail:
+    image: grafana/promtail:2.9.4
+    container_name: devops_promtail
+    restart: unless-stopped
+    user: "0:0"
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - backend-net
+
+  # Nginx Reverse Proxy (только он имеет доступ наружу!)
+  nginx:
+    image: nginx:1.25.4-alpine
+    container_name: devops_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80" # Открываем стандартный веб-порт на вашем компьютере
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - frontend-net
+      - backend-net
+    depends_on:
+       test-app:
+          condition: service_started
+       grafana:
+          condition: service_started
+
+    # Сервис автоматического резервного копирования СУБД
+  postgres-backup:
+    image: prodrigestivill/postgres-backup-local:15
+    container_name: devops_postgres_backup
+    restart: unless-stopped
+    user: "0:0" # Запуск от root для корректной записи файлов на диск Linux
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_CLUSTER=true
+      - POSTGRES_USER=postgres_user
+      - POSTGRES_PASSWORD=postgres_password
+      - POSTGRES_DB=devops_db
+      # Расписание в формате Cron. 
+      # Строка "0 2 * * *" означает: делать бэкап каждый день ровно в 02:00 ночи
+      - POSTGRES_BACKUP_CRON=0 2 * * *
+      # Сколько дней хранить бэкапы перед удалением (очистка старых архивов)
+      - POSTGRES_EXTRA_OPTS=-Z6 # Уровень сжатия архива от 1 до 9 (6 — оптимально)
+      - BACKUP_KEEP_DAYS=7
+    volumes:
+      # Папка на вашем Debian, куда будут складываться готовые файлы бэкапов (.sql.gz)
+      - ./backups:/var/lib/postgresql/data
+    networks:
+      - backend-net
+    depends_on:
+      - postgres
+

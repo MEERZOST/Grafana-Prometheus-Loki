@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 5s #Каждые 5сек прометеус будет забирать метрики
+
+scrape_configs:
+ #Настройка сборка метрик с приложения python
+  - job_name: 'my-test-app'
+    static_configs:
+      - targets: ['test-app:8000']
+
+  - job_name: 'postgres-database'
+    static_configs:
+      # Указываем имя Docker-сервиса экспортера и его стандартный порт
+      - targets: ['postgres-exporter:9187']

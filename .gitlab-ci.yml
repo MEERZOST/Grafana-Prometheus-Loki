@@ -1,0 +1,41 @@
+# Описываем этапы нашего конвейера
+stages:
+  - lint       # Проверка синтаксиса
+  - build      # Сборка Docker-образа
+
+# Используем официальный образ Docker для запуска команд сборки
+image: docker:24.0.7
+
+# Подключаем Docker-в-Docker (DinD), чтобы внутри контейнера GitLab работал демон Docker
+services:
+  - docker:24.0.7-dind
+
+variables:
+  # Отключаем TLS в dind для простоты локальной практики
+  DOCKER_TLS_CERTDIR: ""
+  # Автоматический адрес встроенного хранилища образов GitLab
+  IMAGE_TAG: $CI_REGISTRY_IMAGE:latest
+
+# --- ЭТАП 1: ПРОВЕРКА ---
+lint_compose:
+  stage: lint
+  image: docker:24.0.7
+  script:
+    - echo "Проверяем синтаксис docker-compose.yml..."
+    # Команда проверяет конфиг compose на валидность без его реального запуска
+    - docker compose config -q
+  # Разрешаем запускать этот шаг без поднятия тяжелого Docker-в-Docker
+  services: []
+
+# --- ЭТАП 2: СБОРКА И ПУШ ---
+build_app:
+  stage: build
+  script:
+    - echo "Авторизуемся во встроенном Docker Registry GitLab..."
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
+    
+    - echo "Начинаем сборку Multi-stage образа нашего приложения..."
+    - docker build -t $IMAGE_TAG .
+    
+    - echo "Отправляем готовый образ в GitLab Registry..."
+    - docker push $IMAGE_TAG
