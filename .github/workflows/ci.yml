@@ -1,0 +1,44 @@
+name: DevOps CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Скачиваем код из репозитория
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # 2. Проверяем, что все конфигурационные файлы на месте (в корне)
+    - name: Verify configuration files
+      run: |
+        ls -la nginx.conf prometheus.yml docker-compose.yml
+
+    # 3. Собираем проект из корня
+    - name: Build and Start Containers
+      run: |
+        docker compose up -d --build
+
+    # 4. Ожидаем инициализации контейнеров
+    - name: Wait for services to be ready
+      run: sleep 15
+
+    # 5. Проверяем статус запущенных контейнеров
+    - name: Check running containers
+      run: |
+        docker compose ps
+        
+    # 6. Делаем тестовый запрос к приложению через порт Nginx
+    - name: Test Application HTTP Response
+      run: |
+        curl -f http://localhost/ || exit 1
+
+    # 7. Останавливаем контейнеры и очищаем временные данные сборки
+    - name: Stop containers
+      run: docker compose down -v
