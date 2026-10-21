@@ -18,7 +18,7 @@ jobs:
     # 2. Проверяем, что все конфигурационные файлы на месте (в корне)
     - name: Verify configuration files
       run: |
-        ls -la nginx.conf prometheus.yml docker-compose.yml
+        ls -la nginx.conf prometheus.yml docker-compose.yaml
 
     # 3. Собираем проект из корня
     - name: Build and Start Containers
